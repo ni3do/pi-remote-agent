@@ -10,8 +10,12 @@ const workspaceDir = process.env.WORKSPACE_DIR || "/workspace";
 const port = parseInt(process.env.PORT || "3000");
 const maxSessions = parseInt(process.env.MAX_SESSIONS || "8");
 
+const sttEnabled = process.env.STT_ENABLED?.toLowerCase() === "true";
+const whisperModel = process.env.WHISPER_MODEL || "base";
+
 console.log(`[pi-remote] Workspace: ${workspaceDir}`);
 console.log(`[pi-remote] Max sessions: ${maxSessions}`);
+console.log(`[pi-remote] Speech-to-text: ${sttEnabled ? `enabled (model=${whisperModel})` : "disabled"}`);
 
 // Create the shared Pi agent
 const agent = new PiAgent({ workspaceDir, maxSessions });

@@ -16,6 +16,10 @@ services:
 
     environment:
       - WORKSPACE_DIR=/workspace
+      # Speech-to-text (local Whisper). Set STT_ENABLED=true to activate.
+      - STT_ENABLED=${STT_ENABLED:-false}
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-en}
 
 # Fallback named volumes (used when env vars are not set)
 volumes:

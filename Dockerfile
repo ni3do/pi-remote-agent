@@ -9,10 +9,17 @@ RUN apt-get update && apt-get install -y \
     fd-find \
     python3 \
     python3-pip \
+    python3-venv \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Symlink fd (Debian names it fdfind)
 RUN ln -s $(which fdfind) /usr/local/bin/fd || true
+
+# Install OpenAI Whisper for local speech-to-text transcription.
+# Uses --break-system-packages since this is a container.
+# PyTorch CPU is sufficient — Whisper "base" model runs in ~5-10s for 30s audio.
+RUN pip3 install --break-system-packages openai-whisper
 
 # Install Playwright with Chromium
 RUN npx playwright install --with-deps chromium

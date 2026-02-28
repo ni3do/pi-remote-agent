@@ -17,6 +17,7 @@ import {
   type ThreadChannel,
 } from "discord.js";
 import type { PiAgent, PiResponse } from "./pi-agent.js";
+import { isSttEnabled, isAudioMime, transcribe } from "./transcribe.js";
 
 const MAX_DISCORD_LENGTH = 2000;
 
@@ -62,9 +63,40 @@ export function createDiscordBot(agent: PiAgent, token: string) {
       ? `discord-${message.channel.id}`
       : `discord-dm-${message.author.id}`;
 
-    const content = message.content
+    let content = message.content
       .replace(new RegExp(`<@!?${client.user!.id}>`), "")
       .trim();
+
+    // Handle voice messages and audio attachments
+    if (isSttEnabled() && message.attachments.size > 0) {
+      const transcribedParts: string[] = [];
+
+      for (const [, attachment] of message.attachments) {
+        // Discord voice messages have contentType audio/ogg and flags with VOICE_MESSAGE bit
+        const mime = attachment.contentType?.split(";")[0] || "";
+        if (!isAudioMime(mime)) continue;
+
+        try {
+          await message.reply("🎙️ Transcribing voice message...");
+          const response = await fetch(attachment.url);
+          if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+          const buffer = Buffer.from(await response.arrayBuffer());
+          const text = await transcribe(buffer, mime);
+          transcribedParts.push(text);
+        } catch (err: any) {
+          console.error("[Discord] Transcription error:", err);
+          await message.reply(`⚠️ Couldn't transcribe audio: ${err.message?.slice(0, 150)}`);
+        }
+      }
+
+      if (transcribedParts.length > 0) {
+        const transcribed = transcribedParts.join("\n");
+        // Show the user what was transcribed
+        await message.reply(`🎙️ *Transcribed:* "${transcribed.slice(0, 300)}${transcribed.length > 300 ? "…" : ""}"`);
+        // Combine with any text content the user also sent
+        content = content ? `${content}\n\n${transcribed}` : transcribed;
+      }
+    }
 
     if (!content) return;
 
