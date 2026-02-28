@@ -69,10 +69,9 @@ The UI has two tabs:
 2. Enable **Message Content Intent** under Bot settings
 3. Add bot to your server with permissions: Send Messages, Read Message History, Read Messages
 4. Set `DISCORD_BOT_TOKEN` in `.env`
-5. Optionally set `DISCORD_CHANNEL_ID` to restrict to one channel
-
 **Usage:**
 - Mention the bot: `@pi-agent list all TypeScript files in src/`
+- Once tagged in a thread, the bot auto-responds to all messages in that thread
 - DM the bot directly
 - `!new` — start a fresh session
 - `!status` — check if the agent is running
@@ -160,8 +159,6 @@ MAX_SESSIONS=8
 
 # Optional: Discord
 DISCORD_BOT_TOKEN=...
-DISCORD_CHANNEL_ID=...
-
 # Optional: Slack
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
@@ -249,7 +246,7 @@ Just push to your repo. If auto-deploy is enabled, Dokploy rebuilds and restarts
 | `WORKSPACE_DIR` | No | Workspace path inside container (default: `/workspace`) |
 | `PORT` | No | HTTP API port (default: `3000`) |
 | `DISCORD_BOT_TOKEN` | No | Enables Discord bot |
-| `DISCORD_CHANNEL_ID` | No | Restrict Discord bot to one channel |
+
 | `SLACK_BOT_TOKEN` | No | Enables Slack bot |
 | `SLACK_APP_TOKEN` | No | Required for Slack Socket Mode |
 | `SLACK_SIGNING_SECRET` | No | Required for Slack |
