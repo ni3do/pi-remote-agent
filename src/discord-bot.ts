@@ -38,11 +38,13 @@ export function createDiscordBot(agent: PiAgent, token: string, channelId?: stri
     // Ignore own messages
     if (message.author.bot) return;
 
-    // In guilds, only respond if mentioned or in the configured channel
+    // In guilds: respond if mentioned, in configured channel, or in a thread we're already in
     if (message.guild) {
       const mentioned = message.mentions.has(client.user!);
       const inChannel = channelId && message.channelId === channelId;
-      if (!mentioned && !inChannel) return;
+      const inActiveThread = message.channel.isThread()
+        && agent.getActiveThreads().includes(`discord-${message.channel.id}`);
+      if (!mentioned && !inChannel && !inActiveThread) return;
     }
 
     // Use thread ID for session scoping (or DM user ID)
