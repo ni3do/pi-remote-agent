@@ -149,9 +149,14 @@ git push -u origin main
 Go to the **Environment** tab and add your keys:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...
+# GitHub access (for cloning and pushing)
+GITHUB_TOKEN=github_pat_...
+GIT_USER_NAME=Your Name
+GIT_USER_EMAIL=you@example.com
+
 WORKSPACE_DIR=/workspace
 PORT=3000
+MAX_SESSIONS=8
 
 # Optional: Discord
 DISCORD_BOT_TOKEN=...
@@ -165,19 +170,32 @@ SLACK_SIGNING_SECRET=...
 
 These are written to `.env` and loaded via `env_file` in the compose file.
 
-### 4. Set up the workspace
+### 4. Set up LLM auth
 
-The workspace uses Dokploy's `../files/` persistent storage, which survives across deploys.
+**Option A: API key** — add `ANTHROPIC_API_KEY=sk-ant-...` to the environment variables.
 
-**Option A: Clone a repo into the workspace** (via Dokploy terminal or SSH)
+**Option B: Claude subscription (Pro/Max)** — use your existing subscription:
+
+1. On your local machine, run `pi` and `/login` to authenticate
+2. Copy the auth file to your server:
+   ```bash
+   # On your server, in the Dokploy compose app's files directory:
+   mkdir -p files/pi-auth
+   ```
+3. Copy `~/.pi/agent/auth.json` from your local machine to `files/pi-auth/auth.json` on the server
+4. The `docker-compose.yml` already mounts this file into the container
+5. Pi handles token refresh automatically
+
+### 5. Set up the workspace
+
+The workspace uses Dokploy's `../files/` persistent storage, which survives across deploys. Repos are cloned automatically when you use the `!repo` command — no manual setup needed.
+
+If you want to pre-clone a repo (via Dokploy terminal or SSH):
 
 ```bash
-# Find your compose app directory
 cd /path/to/dokploy/compose/app/files/workspace
-git clone https://github.com/you/your-project .
+git clone https://github.com/you/your-project
 ```
-
-**Option B: Use Dokploy's Advanced → Mounts** to upload config files, then clone from inside the container on first run.
 
 ### 5. Set up domain (optional)
 
