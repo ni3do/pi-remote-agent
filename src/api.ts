@@ -9,6 +9,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import type { PiAgent, PiEvent } from "./pi-agent.js";
+import { isSttEnabled, transcribe } from "./transcribe.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -79,6 +80,11 @@ export function createApi(agent: PiAgent, port: number) {
   // List active threads (backward compat)
   app.get("/api/threads", (_req, res) => {
     res.json({ threads: agent.getActiveThreads() });
+  });
+
+  // STT status — lets the web UI know whether to show the mic button
+  app.get("/api/stt-status", (_req, res) => {
+    res.json({ enabled: isSttEnabled() });
   });
 
   // --- WebSocket for real-time streaming ---
@@ -152,6 +158,56 @@ export function createApi(agent: PiAgent, port: number) {
                 );
               }
             });
+        }
+
+        if (msg.type === "voice") {
+          const threadId = msg.threadId || "web-default";
+
+          if (!isSttEnabled()) {
+            ws.send(JSON.stringify({
+              threadId, source: "web", timestamp: Date.now(),
+              type: "error",
+              data: { message: "Speech-to-text is not enabled (set STT_ENABLED=true)" },
+            }));
+            return;
+          }
+
+          try {
+            const audioBuffer = Buffer.from(msg.audio, "base64");
+            const format = msg.format || "audio/webm";
+
+            // Notify client that transcription is in progress
+            ws.send(JSON.stringify({
+              threadId, source: "web", timestamp: Date.now(),
+              type: "transcription_start", data: {},
+            }));
+
+            const text = await transcribe(audioBuffer, format);
+
+            // Send transcription result back to client
+            ws.send(JSON.stringify({
+              threadId, source: "web", timestamp: Date.now(),
+              type: "transcription_complete", data: { text },
+            }));
+
+            // Automatically send the transcribed text as a chat message
+            agent
+              .chat(threadId, text, "web")
+              .catch((err) => {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({
+                    threadId, source: "web", timestamp: Date.now(),
+                    type: "error", data: { message: err.message },
+                  }));
+                }
+              });
+          } catch (err: any) {
+            ws.send(JSON.stringify({
+              threadId, source: "web", timestamp: Date.now(),
+              type: "error",
+              data: { message: `Transcription failed: ${err.message}` },
+            }));
+          }
         }
 
         if (msg.type === "new_session") {

@@ -13,6 +13,7 @@
 import pkg from "@slack/bolt";
 const { App } = pkg;
 import type { PiAgent, PiResponse } from "./pi-agent.js";
+import { isSttEnabled, isAudioMime, transcribe } from "./transcribe.js";
 
 export function createSlackBot(
   agent: PiAgent,
@@ -31,7 +32,19 @@ export function createSlackBot(
   app.event("app_mention", async ({ event, say, client }) => {
     const threadTs = event.thread_ts || event.ts;
     const threadId = `slack-${event.channel}-${threadTs}`;
-    const content = event.text.replace(/<@[A-Z0-9]+>/g, "").trim();
+    let content = event.text.replace(/<@[A-Z0-9]+>/g, "").trim();
+
+    // Handle audio file uploads
+    if (isSttEnabled() && (event as any).files?.length > 0) {
+      const transcribed = await transcribeSlackFiles(
+        (event as any).files,
+        app.client,
+        async (text) => { await say({ text, thread_ts: threadTs }); }
+      );
+      if (transcribed) {
+        content = content ? `${content}\n\n${transcribed}` : transcribed;
+      }
+    }
 
     if (!content) return;
 
@@ -120,7 +133,19 @@ export function createSlackBot(
     if ((event as any).channel_type !== "im" || (event as any).subtype) return;
 
     const threadId = `slack-dm-${(event as any).user}`;
-    const content = (event as any).text || "";
+    let content = (event as any).text || "";
+
+    // Handle audio file uploads in DMs
+    if (isSttEnabled() && (event as any).files?.length > 0) {
+      const transcribed = await transcribeSlackFiles(
+        (event as any).files,
+        app.client,
+        async (text) => { await say(text); }
+      );
+      if (transcribed) {
+        content = content ? `${content}\n\n${transcribed}` : transcribed;
+      }
+    }
 
     if (!content) return;
 
@@ -159,6 +184,47 @@ export function createSlackBot(
   });
 
   return app;
+}
+
+/**
+ * Transcribe audio files from a Slack message.
+ * Downloads each audio file via Slack API and runs Whisper.
+ */
+async function transcribeSlackFiles(
+  files: any[],
+  client: any,
+  notify: (text: string) => Promise<void>
+): Promise<string | null> {
+  const parts: string[] = [];
+
+  for (const file of files) {
+    const mime = file.mimetype || "";
+    if (!isAudioMime(mime)) continue;
+
+    try {
+      await notify("🎙️ Transcribing voice message...");
+
+      // Download file from Slack (requires files:read scope)
+      const downloadUrl = file.url_private_download || file.url_private;
+      if (!downloadUrl) throw new Error("No download URL for file");
+
+      const response = await fetch(downloadUrl, {
+        headers: { Authorization: `Bearer ${client.token}` },
+      });
+      if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const text = await transcribe(buffer, mime);
+      parts.push(text);
+
+      await notify(`🎙️ *Transcribed:* "${text.slice(0, 300)}${text.length > 300 ? "…" : ""}"`);
+    } catch (err: any) {
+      console.error("[Slack] Transcription error:", err);
+      await notify(`⚠️ Couldn't transcribe audio: ${err.message?.slice(0, 150)}`);
+    }
+  }
+
+  return parts.length > 0 ? parts.join("\n") : null;
 }
 
 /**

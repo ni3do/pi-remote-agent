@@ -429,6 +429,25 @@
   .input-area button:hover { opacity: 0.9; }
   .input-area button:disabled { opacity: 0.4; cursor: not-allowed; }
 
+  /* Mic button */
+  .mic-btn {
+    background: var(--bg3) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+    font-size: 18px !important;
+    padding: 10px 14px !important;
+    font-weight: normal !important;
+    transition: all 0.2s;
+  }
+  .mic-btn:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
+  .mic-btn.recording {
+    background: #5c2327 !important;
+    border-color: var(--red) !important;
+    color: var(--red) !important;
+    animation: pulse 1s infinite;
+  }
+  .mic-btn.hidden { display: none; }
+
   /* === Tabs for chat vs monitor === */
   .view-tabs {
     display: flex;
@@ -547,6 +566,7 @@
   <!-- Input -->
   <div class="input-area">
     <textarea id="input" placeholder="Message the pi agent… (Shift+Enter for newline)" rows="1"></textarea>
+    <button id="micBtn" class="mic-btn hidden" onclick="toggleRecording()" title="Hold or click to record voice message">🎤</button>
     <button id="sendBtn" onclick="sendMessage()">Send</button>
   </div>
 </div>
@@ -615,6 +635,7 @@ function connect() {
   ws.onopen = () => {
     document.getElementById('connectionStatus').textContent = 'connected';
     document.getElementById('connectionStatus').style.color = '#3fb950';
+    checkSttStatus(); // Show/hide mic button based on server config
   };
 
   ws.onclose = () => {
@@ -695,6 +716,18 @@ function handleEvent(event) {
         threads.get(threadId).messages = [];
         renderMessages();
       }
+      break;
+
+    case 'transcription_start':
+      if (isCurrentThread) {
+        addChatMessage(threadId, 'system', '🎙️ Transcribing...', source);
+      }
+      break;
+
+    case 'transcription_complete':
+      // Show the transcribed text as a user message
+      addChatMessage(threadId, 'user', `🎙️ ${data.text}`, source);
+      streamingText = '';
       break;
 
     case 'worktree_created':
@@ -1058,9 +1091,107 @@ input.addEventListener('keydown', (e) => {
 
 input.addEventListener('input', () => autoResize(input));
 
+// --- Voice recording ---
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+
+/** Check if STT is enabled on the server and show/hide mic button */
+async function checkSttStatus() {
+  try {
+    const res = await fetch('/api/stt-status');
+    const data = await res.json();
+    const micBtn = document.getElementById('micBtn');
+    if (data.enabled) {
+      micBtn.classList.remove('hidden');
+    } else {
+      micBtn.classList.add('hidden');
+    }
+  } catch {
+    // Server not ready yet, will retry on connect
+  }
+}
+
+async function toggleRecording() {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    await startRecording();
+  }
+}
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+
+    // Prefer webm/opus, fall back to whatever the browser supports
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : 'audio/ogg';
+
+    mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = async () => {
+      // Stop all tracks to release the microphone
+      stream.getTracks().forEach(t => t.stop());
+
+      const blob = new Blob(audioChunks, { type: mimeType });
+      audioChunks = [];
+
+      if (blob.size < 1000) {
+        // Too short, probably accidental
+        addChatMessage(currentThread, 'system', '⚠️ Recording too short, try again.', 'web');
+        return;
+      }
+
+      // Convert to base64 and send via WebSocket
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1];
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          addChatMessage(currentThread, 'system', '🎙️ Transcribing voice message...', 'web');
+          setWorking(true);
+          ws.send(JSON.stringify({
+            type: 'voice',
+            threadId: currentThread,
+            audio: base64,
+            format: mimeType.split(';')[0], // e.g. "audio/webm"
+          }));
+        }
+      };
+      reader.readAsDataURL(blob);
+    };
+
+    mediaRecorder.start();
+    isRecording = true;
+    document.getElementById('micBtn').classList.add('recording');
+    document.getElementById('micBtn').title = 'Click to stop recording';
+  } catch (err) {
+    console.error('Microphone access error:', err);
+    addChatMessage(currentThread, 'error', `Microphone error: ${err.message}`, 'web');
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+  }
+  isRecording = false;
+  document.getElementById('micBtn').classList.remove('recording');
+  document.getElementById('micBtn').title = 'Click to record voice message';
+}
+
 // --- Init ---
 connect();
 renderThreadList();
+checkSttStatus();
 </script>
 
 </body>
