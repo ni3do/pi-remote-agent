@@ -14,10 +14,13 @@ git config --global user.email "${GIT_USER_EMAIL:-pi-remote-agent@noreply}"
 # Trust all directories in workspace
 git config --global --add safe.directory '*'
 
-# Write pi auth.json from env vars if provided
-# Supports Claude subscription (OAuth) or API key
-if [ -n "$ANTHROPIC_OAUTH_REFRESH" ]; then
-  mkdir -p /root/.pi/agent
+# Write pi auth.json from env vars ONLY if it doesn't already exist on the volume.
+# Once written, pi handles token refresh internally and updates the file.
+# The volume persists the refreshed tokens across restarts.
+mkdir -p /root/.pi/agent
+if [ -f /root/.pi/agent/auth.json ]; then
+  echo "[entrypoint] Pi auth loaded from volume (existing auth.json)"
+elif [ -n "$ANTHROPIC_OAUTH_REFRESH" ]; then
   cat > /root/.pi/agent/auth.json <<EOF
 {
   "anthropic": {
@@ -28,9 +31,8 @@ if [ -n "$ANTHROPIC_OAUTH_REFRESH" ]; then
   }
 }
 EOF
-  echo "[entrypoint] Pi auth configured from env vars (OAuth)"
+  echo "[entrypoint] Pi auth initialized from env vars (OAuth)"
 elif [ -n "$ANTHROPIC_API_KEY" ]; then
-  mkdir -p /root/.pi/agent
   cat > /root/.pi/agent/auth.json <<EOF
 {
   "anthropic": {
@@ -39,7 +41,9 @@ elif [ -n "$ANTHROPIC_API_KEY" ]; then
   }
 }
 EOF
-  echo "[entrypoint] Pi auth configured from env vars (API key)"
+  echo "[entrypoint] Pi auth initialized from env vars (API key)"
+else
+  echo "[entrypoint] WARNING: No auth configured (set ANTHROPIC_OAUTH_REFRESH or ANTHROPIC_API_KEY)"
 fi
 
 echo "[entrypoint] Starting pi-remote-agent..."

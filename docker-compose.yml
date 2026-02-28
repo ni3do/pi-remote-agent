@@ -11,8 +11,8 @@ services:
       # Workspace: configurable host path via env var, or Docker named volume
       - ${WORKSPACE_HOST_PATH:-pi-workspace}:/workspace
 
-      # Persist pi sessions
-      - ${SESSIONS_HOST_PATH:-pi-sessions}:/root/.pi/agent/sessions
+      # Pi agent config (auth.json lives here, token refresh persists across restarts)
+      - pi-agent-config:/root/.pi/agent
 
     environment:
       - WORKSPACE_DIR=/workspace
@@ -21,7 +21,7 @@ services:
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
       - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-en}
 
-# Fallback named volumes (used when env vars are not set)
+# Named volumes (managed by Docker, persist across restarts and redeploys)
 volumes:
   pi-workspace:
-  pi-sessions:
+  pi-agent-config:
