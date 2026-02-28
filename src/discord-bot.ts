@@ -158,51 +158,143 @@ async function getThreadContext(thread: ThreadChannel): Promise<string | undefin
 }
 
 /**
- * Send a PiResponse back to Discord, chunking if needed.
+ * Format a Pi response for Discord's markdown flavor.
+ *
+ * Discord supports: **bold**, *italic*, `inline code`, ```code blocks```,
+ * > blockquotes, - lists, ||spoilers||, ~~strikethrough~~, headings (#, ##, ###)
+ *
+ * What Discord does NOT support (that standard markdown does):
+ * - HTML tags (stripped)
+ * - Tables (render as plain text)
+ * - Images via ![]() (shows as link)
+ *
+ * This function cleans up the agent's markdown to look good on Discord.
  */
-async function sendResponse(message: Message, response: PiResponse) {
-  // Build tool call summary
-  let toolSummary = "";
-  if (response.toolCalls.length > 0) {
-    const lines = response.toolCalls.map((tc) => {
-      const status = tc.isError ? "❌" : "✅";
-      const argStr =
-        typeof tc.args === "object"
-          ? Object.entries(tc.args)
-              .map(([k, v]) => `${k}: ${String(v).slice(0, 100)}`)
-              .join(", ")
-          : String(tc.args);
-      return `${status} **${tc.tool}**(${argStr.slice(0, 150)})`;
-    });
-    toolSummary = "\n\n🔧 **Tools used:**\n" + lines.join("\n");
+function formatForDiscord(text: string): string {
+  let result = text;
+
+  // Convert HTML tables to simple text (agent sometimes generates these)
+  result = result.replace(/<table[\s\S]*?<\/table>/g, (match) => {
+    // Extract text content from table cells
+    const rows = match.match(/<tr[\s\S]*?<\/tr>/g) || [];
+    return rows
+      .map((row) => {
+        const cells = row.match(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g) || [];
+        return cells
+          .map((cell) => cell.replace(/<[^>]+>/g, "").trim())
+          .join(" | ");
+      })
+      .join("\n");
+  });
+
+  // Strip any remaining HTML tags
+  result = result.replace(/<[^>]+>/g, "");
+
+  // Collapse 3+ consecutive blank lines to 2
+  result = result.replace(/\n{3,}/g, "\n\n");
+
+  return result;
+}
+
+/**
+ * Build a tool call summary section for Discord.
+ * Groups by tool and uses Discord formatting.
+ */
+function formatToolSummary(toolCalls: PiResponse["toolCalls"]): string {
+  if (toolCalls.length === 0) return "";
+
+  // Group tool calls for a cleaner summary
+  const grouped = new Map<string, { count: number; errors: number }>();
+  for (const tc of toolCalls) {
+    const key = tc.tool;
+    const existing = grouped.get(key) || { count: 0, errors: 0 };
+    existing.count++;
+    if (tc.isError) existing.errors++;
+    grouped.set(key, existing);
   }
 
-  const fullText = (response.text + toolSummary).trim();
+  // If few tool calls, show individually; if many, show grouped
+  if (toolCalls.length <= 5) {
+    const lines = toolCalls.map((tc) => {
+      const status = tc.isError ? "❌" : "✅";
+      return `${status} \`${tc.tool}\``;
+    });
+    return "\n\n> 🔧 **Tools used:**\n> " + lines.join("\n> ");
+  }
+
+  const lines: string[] = [];
+  for (const [tool, info] of grouped) {
+    const status = info.errors > 0 ? "⚠️" : "✅";
+    const count = info.count > 1 ? ` ×${info.count}` : "";
+    const errors = info.errors > 0 ? ` (${info.errors} failed)` : "";
+    lines.push(`${status} \`${tool}\`${count}${errors}`);
+  }
+  return "\n\n> 🔧 **Tools used:**\n> " + lines.join("\n> ");
+}
+
+/**
+ * Send a PiResponse back to Discord, chunking if needed.
+ * Formats markdown for Discord's rendering engine.
+ */
+async function sendResponse(message: Message, response: PiResponse) {
+  const formattedText = formatForDiscord(response.text);
+  const toolSummary = formatToolSummary(response.toolCalls);
+
+  const fullText = (formattedText + toolSummary).trim();
 
   if (!fullText) {
     await message.reply("_(No response)_");
     return;
   }
 
-  // Chunk into Discord-safe sizes
+  // Chunk into Discord-safe sizes, respecting code block boundaries
   const chunks = chunkText(fullText, MAX_DISCORD_LENGTH);
   for (const chunk of chunks) {
     await message.reply(chunk);
   }
 }
 
+/**
+ * Chunk text into Discord-safe sizes.
+ * Respects code block boundaries — if a chunk splits inside a ```code block```,
+ * closes it at the end of the chunk and reopens it in the next.
+ */
 function chunkText(text: string, maxLen: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
+
   while (remaining.length > 0) {
     if (remaining.length <= maxLen) {
       chunks.push(remaining);
       break;
     }
+
+    // Try to break at a newline, preferring one before maxLen
     let breakAt = remaining.lastIndexOf("\n", maxLen);
     if (breakAt < maxLen / 2) breakAt = maxLen;
-    chunks.push(remaining.slice(0, breakAt));
+
+    let chunk = remaining.slice(0, breakAt);
     remaining = remaining.slice(breakAt);
+
+    // Check if we're inside an unclosed code block
+    const backtickMatches = chunk.match(/```/g);
+    const unclosed = backtickMatches && backtickMatches.length % 2 !== 0;
+
+    if (unclosed) {
+      // Find the language specifier from the last opening ```
+      const lastOpen = chunk.lastIndexOf("```");
+      const afterOpen = chunk.slice(lastOpen + 3);
+      const langMatch = afterOpen.match(/^(\w*)\n/);
+      const lang = langMatch ? langMatch[1] : "";
+
+      // Close the code block in this chunk
+      chunk += "\n```";
+      // Reopen it in the next chunk
+      remaining = "```" + lang + "\n" + remaining;
+    }
+
+    chunks.push(chunk);
   }
+
   return chunks;
 }
