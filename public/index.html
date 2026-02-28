@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pi remote agent</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --bg3: #21262d;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --orange: #d29922;
+    --purple: #bc8cff;
+    --cyan: #39d353;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+  }
+
+  /* === Layout === */
+  .sidebar {
+    width: 260px;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  /* === Sidebar === */
+  .sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .sidebar-header .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .sidebar-section {
+    padding: 12px 16px 4px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+  }
+
+  .thread-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 8px;
+  }
+
+  .thread-item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+
+  .thread-item:hover { background: var(--bg3); color: var(--text); }
+  .thread-item.active { background: var(--bg3); color: var(--accent); }
+  .thread-item .source-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  .new-session-btn {
+    margin: 8px;
+    padding: 8px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    text-align: center;
+  }
+  .new-session-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* === Monitor Panel (bottom of sidebar) === */
+  .monitor-panel {
+    border-top: 1px solid var(--border);
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 11px;
+  }
+
+  .monitor-panel .sidebar-section { padding-top: 8px; }
+
+  .monitor-entry {
+    padding: 3px 16px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .monitor-entry.tool { color: var(--orange); }
+  .monitor-entry.error { color: var(--red); }
+  .monitor-entry.user { color: var(--accent); }
+  .monitor-entry .ts { color: var(--text-dim); opacity: 0.5; margin-right: 6px; }
+
+  /* === Main chat area === */
+  .chat-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .chat-header .thread-name { font-weight: 600; }
+  .chat-header .status {
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .status .working {
+    color: var(--orange);
+    display: none;
+  }
+  .status .working.active { display: inline-flex; align-items: center; gap: 4px; }
+  .status .working .spinner {
+    width: 12px; height: 12px;
+    border: 2px solid var(--border);
+    border-top-color: var(--orange);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .message {
+    max-width: 85%;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  .message.user {
+    align-self: flex-end;
+    background: #1f3a5f;
+    border: 1px solid #264a78;
+  }
+
+  .message.assistant {
+    align-self: flex-start;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+  }
+
+  .message.tool-call {
+    align-self: flex-start;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    max-width: 90%;
+    width: 90%;
+  }
+
+  .message.error {
+    align-self: flex-start;
+    background: #2d1215;
+    border: 1px solid #5c2327;
+    color: var(--red);
+  }
+
+  .message.system-msg {
+    align-self: center;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 12px;
+    padding: 4px;
+  }
+
+  .tool-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    font-weight: 600;
+    color: var(--orange);
+  }
+
+  .tool-header.error { color: var(--red); }
+
+  .tool-args {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+
+  .tool-result {
+    background: var(--bg2);
+    border-radius: 4px;
+    padding: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .tool-result.collapsed {
+    max-height: 60px;
+    cursor: pointer;
+    position: relative;
+  }
+
+  .tool-result.collapsed::after {
+    content: '▼ click to expand';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    text-align: center;
+    padding: 4px;
+    background: linear-gradient(transparent, var(--bg2));
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  /* Source indicator for monitored messages */
+  .msg-source {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--bg3);
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    display: inline-block;
+  }
+
+  .msg-source.discord { color: #5865f2; }
+  .msg-source.slack { color: #e01e5a; }
+  .msg-source.web { color: var(--cyan); }
+
+  /* === Input area === */
+  .input-area {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+  }
+
+  .input-area textarea {
+    flex: 1;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    padding: 10px 14px;
+    resize: none;
+    min-height: 44px;
+    max-height: 200px;
+    outline: none;
+  }
+
+  .input-area textarea:focus { border-color: var(--accent); }
+
+  .input-area button {
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    color: #000;
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 10px 20px;
+    cursor: pointer;
+    align-self: flex-end;
+  }
+
+  .input-area button:hover { opacity: 0.9; }
+  .input-area button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* === Tabs for chat vs monitor === */
+  .view-tabs {
+    display: flex;
+    gap: 0;
+    background: var(--bg2);
+  }
+
+  .view-tab {
+    flex: 1;
+    padding: 8px;
+    text-align: center;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--text-dim);
+    border-bottom: 2px solid transparent;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .view-tab:hover { color: var(--text); }
+  .view-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* === Activity log view === */
+  .activity-log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px;
+    font-size: 12px;
+    display: none;
+  }
+
+  .activity-log.visible { display: block; }
+
+  .log-entry {
+    padding: 3px 0;
+    border-bottom: 1px solid var(--bg3);
+    display: flex;
+    gap: 8px;
+  }
+
+  .log-entry .log-time { color: var(--text-dim); opacity: 0.5; flex-shrink: 0; width: 70px; }
+  .log-entry .log-thread { color: var(--purple); flex-shrink: 0; width: 120px; overflow: hidden; text-overflow: ellipsis; }
+  .log-entry .log-source { flex-shrink: 0; width: 55px; }
+  .log-entry .log-type { color: var(--orange); flex-shrink: 0; width: 100px; }
+  .log-entry .log-detail { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .log-entry .log-source.discord { color: #5865f2; }
+  .log-entry .log-source.slack { color: #e01e5a; }
+  .log-entry .log-source.web { color: var(--cyan); }
+  .log-entry .log-source.api { color: var(--text-dim); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+
+  /* Mobile */
+  @media (max-width: 768px) {
+    .sidebar { display: none; }
+    .message { max-width: 95%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="sidebar-header">
+    <span class="dot"></span>
+    pi remote agent
+  </div>
+
+  <div class="sidebar-section">Sessions</div>
+  <div class="thread-list" id="threadList">
+    <div class="thread-item active" data-thread="web-default">
+      <span>💬</span> default
+    </div>
+  </div>
+  <button class="new-session-btn" onclick="newSession()">+ New Session</button>
+
+  <div class="monitor-panel">
+    <div class="sidebar-section">Live Activity</div>
+    <div id="liveMonitor"></div>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <div class="chat-header">
+    <span class="thread-name" id="threadName">web-default</span>
+    <div class="status">
+      <span class="working" id="workingIndicator">
+        <span class="spinner"></span>
+        working…
+      </span>
+      <span id="connectionStatus">connecting…</span>
+    </div>
+  </div>
+
+  <!-- View tabs -->
+  <div class="view-tabs">
+    <div class="view-tab active" onclick="switchView('chat')">💬 Chat</div>
+    <div class="view-tab" onclick="switchView('monitor')">📊 All Activity</div>
+  </div>
+
+  <!-- Chat view -->
+  <div class="messages" id="messages">
+    <div class="message system-msg">Send a message to start chatting with the pi agent.</div>
+  </div>
+
+  <!-- Activity log view (monitor) -->
+  <div class="activity-log" id="activityLog"></div>
+
+  <!-- Input -->
+  <div class="input-area">
+    <textarea id="input" placeholder="Message the pi agent… (Shift+Enter for newline)" rows="1"></textarea>
+    <button id="sendBtn" onclick="sendMessage()">Send</button>
+  </div>
+</div>
+
+<script>
+// --- State ---
+let ws = null;
+let currentThread = 'web-default';
+let threads = new Map(); // threadId -> { messages: [], sources: Set }
+let isWorking = false;
+let streamingText = ''; // accumulates streamed text for current response
+let currentView = 'chat';
+
+threads.set('web-default', { messages: [], sources: new Set(['web']) });
+
+// --- WebSocket ---
+function connect() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('connectionStatus').textContent = 'connected';
+    document.getElementById('connectionStatus').style.color = '#3fb950';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('connectionStatus').textContent = 'disconnected';
+    document.getElementById('connectionStatus').style.color = '#f85149';
+    setTimeout(connect, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (e) => {
+    const event = JSON.parse(e.data);
+    handleEvent(event);
+  };
+}
+
+// --- Event handling ---
+function handleEvent(event) {
+  const { threadId, source, type, data, timestamp } = event;
+
+  // Ensure thread exists
+  if (!threads.has(threadId)) {
+    threads.set(threadId, { messages: [], sources: new Set() });
+    renderThreadList();
+  }
+  threads.get(threadId).sources.add(source);
+
+  // Add to activity log
+  addLogEntry(timestamp, threadId, source, type, data);
+
+  // Add to live monitor in sidebar
+  addMonitorEntry(timestamp, threadId, type, data);
+
+  // Handle events for the current thread's chat view
+  const isCurrentThread = threadId === currentThread;
+
+  switch (type) {
+    case 'user_message':
+      if (source !== 'web' || !isCurrentThread) {
+        // Show messages from other sources (discord, slack, api)
+        addChatMessage(threadId, 'user', data.message, source);
+      }
+      break;
+
+    case 'agent_start':
+      if (isCurrentThread) setWorking(true);
+      break;
+
+    case 'text_delta':
+      streamingText += data.delta;
+      if (isCurrentThread) updateStreamingMessage(streamingText);
+      break;
+
+    case 'tool_start':
+      addChatMessage(threadId, 'tool-start', data, source);
+      break;
+
+    case 'tool_end':
+      updateToolMessage(threadId, data);
+      break;
+
+    case 'agent_end':
+    case 'response_complete':
+      if (type === 'response_complete' && streamingText) {
+        finalizeStreamingMessage(threadId, streamingText, source);
+        streamingText = '';
+      }
+      if (isCurrentThread) setWorking(false);
+      break;
+
+    case 'error':
+      addChatMessage(threadId, 'error', data.message, source);
+      if (isCurrentThread) setWorking(false);
+      break;
+
+    case 'session_cleared':
+      if (isCurrentThread) {
+        threads.get(threadId).messages = [];
+        renderMessages();
+      }
+      break;
+  }
+}
+
+// --- Chat messages ---
+function addChatMessage(threadId, type, content, source) {
+  const thread = threads.get(threadId);
+  if (!thread) return;
+
+  thread.messages.push({ type, content, source, timestamp: Date.now() });
+
+  if (threadId === currentThread && currentView === 'chat') {
+    const msgEl = renderSingleMessage({ type, content, source });
+    document.getElementById('messages').appendChild(msgEl);
+    scrollToBottom();
+  }
+}
+
+function renderSingleMessage(msg) {
+  const div = document.createElement('div');
+
+  switch (msg.type) {
+    case 'user':
+      div.className = 'message user';
+      if (msg.source && msg.source !== 'web') {
+        div.innerHTML = `<div class="msg-source ${msg.source}">${msg.source}</div>\n`;
+      }
+      div.textContent += msg.content;
+      break;
+
+    case 'assistant':
+      div.className = 'message assistant';
+      if (msg.source && msg.source !== 'web') {
+        const badge = document.createElement('div');
+        badge.className = `msg-source ${msg.source}`;
+        badge.textContent = msg.source;
+        div.appendChild(badge);
+      }
+      div.appendChild(document.createTextNode(msg.content));
+      break;
+
+    case 'tool-start':
+      div.className = 'message tool-call';
+      div.dataset.toolCallId = msg.content.toolCallId;
+      const argsStr = typeof msg.content.args === 'object'
+        ? Object.entries(msg.content.args).map(([k,v]) => `${k}: ${String(v).slice(0, 200)}`).join(', ')
+        : String(msg.content.args);
+      div.innerHTML = `
+        <div class="tool-header">🔧 ${escHtml(msg.content.tool)}</div>
+        <div class="tool-args">${escHtml(argsStr.slice(0, 300))}</div>
+        <div class="tool-result" style="color: var(--text-dim); font-style: italic;">running…</div>
+      `;
+      break;
+
+    case 'error':
+      div.className = 'message error';
+      div.textContent = `❌ ${msg.content}`;
+      break;
+
+    default:
+      div.className = 'message system-msg';
+      div.textContent = msg.content;
+  }
+
+  return div;
+}
+
+function updateToolMessage(threadId, data) {
+  if (threadId !== currentThread || currentView !== 'chat') return;
+
+  const el = document.querySelector(`.tool-call[data-tool-call-id="${data.toolCallId}"]`);
+  if (!el) return;
+
+  const header = el.querySelector('.tool-header');
+  if (data.isError) header.classList.add('error');
+  header.innerHTML = `${data.isError ? '❌' : '✅'} ${escHtml(data.tool)}`;
+
+  const resultEl = el.querySelector('.tool-result');
+  const resultText = data.result || '';
+  resultEl.textContent = resultText;
+  resultEl.style = '';
+
+  if (resultText.length > 300) {
+    resultEl.classList.add('collapsed');
+    resultEl.onclick = () => resultEl.classList.toggle('collapsed');
+  }
+
+  scrollToBottom();
+}
+
+// --- Streaming message ---
+let streamingEl = null;
+
+function updateStreamingMessage(text) {
+  if (currentView !== 'chat') return;
+
+  if (!streamingEl) {
+    streamingEl = document.createElement('div');
+    streamingEl.className = 'message assistant';
+    streamingEl.id = 'streaming-msg';
+    document.getElementById('messages').appendChild(streamingEl);
+  }
+  streamingEl.textContent = text;
+  scrollToBottom();
+}
+
+function finalizeStreamingMessage(threadId, text, source) {
+  const thread = threads.get(threadId);
+  if (thread) {
+    thread.messages.push({ type: 'assistant', content: text, source, timestamp: Date.now() });
+  }
+
+  if (threadId === currentThread && streamingEl) {
+    streamingEl.id = '';
+    streamingEl = null;
+  }
+}
+
+// --- Render ---
+function renderMessages() {
+  const container = document.getElementById('messages');
+  container.innerHTML = '';
+  streamingEl = null;
+
+  const thread = threads.get(currentThread);
+  if (!thread || thread.messages.length === 0) {
+    container.innerHTML = '<div class="message system-msg">Send a message to start chatting with the pi agent.</div>';
+    return;
+  }
+
+  for (const msg of thread.messages) {
+    container.appendChild(renderSingleMessage(msg));
+  }
+  scrollToBottom();
+}
+
+function renderThreadList() {
+  const list = document.getElementById('threadList');
+  list.innerHTML = '';
+
+  for (const [threadId, thread] of threads) {
+    const div = document.createElement('div');
+    div.className = `thread-item ${threadId === currentThread ? 'active' : ''}`;
+    div.dataset.thread = threadId;
+
+    const sources = Array.from(thread.sources);
+    const sourceBadges = sources.map(s => `<span class="source-badge">${s}</span>`).join('');
+
+    div.innerHTML = `<span>💬</span> ${escHtml(threadId.slice(0, 20))} ${sourceBadges}`;
+    div.onclick = () => switchThread(threadId);
+    list.appendChild(div);
+  }
+}
+
+function switchThread(threadId) {
+  currentThread = threadId;
+  document.getElementById('threadName').textContent = threadId;
+  renderThreadList();
+  renderMessages();
+  setWorking(false);
+  streamingText = '';
+}
+
+function switchView(view) {
+  currentView = view;
+  document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.view-tab')[view === 'chat' ? 0 : 1].classList.add('active');
+
+  document.getElementById('messages').style.display = view === 'chat' ? 'flex' : 'none';
+  const log = document.getElementById('activityLog');
+  log.classList.toggle('visible', view === 'monitor');
+}
+
+// --- Activity log ---
+function addLogEntry(timestamp, threadId, source, type, data) {
+  const log = document.getElementById('activityLog');
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+
+  const time = new Date(timestamp).toLocaleTimeString('en-US', { hour12: false });
+  let detail = '';
+
+  switch (type) {
+    case 'user_message': detail = data.message?.slice(0, 100) || ''; break;
+    case 'text_delta': detail = data.delta?.slice(0, 80) || ''; break;
+    case 'tool_start': detail = `${data.tool}(${formatArgs(data.args)})`; break;
+    case 'tool_end': detail = `${data.tool} → ${data.isError ? 'ERROR' : 'ok'}`; break;
+    case 'error': detail = data.message?.slice(0, 100) || ''; break;
+    default: detail = type;
+  }
+
+  div.innerHTML = `
+    <span class="log-time">${time}</span>
+    <span class="log-thread">${escHtml(threadId.slice(0, 18))}</span>
+    <span class="log-source ${source}">${source}</span>
+    <span class="log-type">${type}</span>
+    <span class="log-detail">${escHtml(detail)}</span>
+  `;
+
+  log.appendChild(div);
+
+  // Keep last 500 entries
+  while (log.children.length > 500) log.removeChild(log.firstChild);
+
+  if (currentView === 'monitor') {
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+// --- Sidebar live monitor ---
+function addMonitorEntry(timestamp, threadId, type, data) {
+  // Skip noisy deltas
+  if (type === 'text_delta' || type === 'thinking_delta' || type === 'tool_update') return;
+
+  const monitor = document.getElementById('liveMonitor');
+  const div = document.createElement('div');
+
+  const time = new Date(timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  let cls = '';
+  let label = type;
+
+  switch (type) {
+    case 'user_message': cls = 'user'; label = `→ ${data.message?.slice(0, 40)}`; break;
+    case 'tool_start': cls = 'tool'; label = `🔧 ${data.tool}`; break;
+    case 'tool_end': cls = data.isError ? 'error' : 'tool'; label = `${data.isError ? '❌' : '✅'} ${data.tool}`; break;
+    case 'agent_start': label = '▶ agent started'; break;
+    case 'agent_end': label = '■ agent done'; break;
+    case 'response_complete': label = '✓ response'; break;
+    case 'error': cls = 'error'; label = `❌ ${data.message?.slice(0, 40)}`; break;
+    default: return; // skip others
+  }
+
+  div.className = `monitor-entry ${cls}`;
+  div.innerHTML = `<span class="ts">${time}</span>${escHtml(label)}`;
+  monitor.appendChild(div);
+
+  while (monitor.children.length > 30) monitor.removeChild(monitor.firstChild);
+  monitor.scrollTop = monitor.scrollHeight;
+}
+
+// --- Actions ---
+function sendMessage() {
+  const input = document.getElementById('input');
+  const message = input.value.trim();
+  if (!message || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // Add user message to UI immediately
+  addChatMessage(currentThread, 'user', message, 'web');
+  streamingText = '';
+
+  ws.send(JSON.stringify({
+    type: 'chat',
+    threadId: currentThread,
+    message,
+  }));
+
+  input.value = '';
+  autoResize(input);
+  setWorking(true);
+}
+
+function newSession() {
+  const name = prompt('Session name (or leave blank for auto):') ?? '';
+  const threadId = name.trim() || `web-${Date.now().toString(36)}`;
+
+  threads.set(threadId, { messages: [], sources: new Set(['web']) });
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'new_session', threadId }));
+  }
+
+  switchThread(threadId);
+  renderThreadList();
+}
+
+function setWorking(working) {
+  isWorking = working;
+  const el = document.getElementById('workingIndicator');
+  el.classList.toggle('active', working);
+  document.getElementById('sendBtn').disabled = working;
+}
+
+// --- Helpers ---
+function scrollToBottom() {
+  const el = currentView === 'chat' ? document.getElementById('messages') : document.getElementById('activityLog');
+  el.scrollTop = el.scrollHeight;
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function formatArgs(args) {
+  if (!args || typeof args !== 'object') return String(args || '');
+  return Object.entries(args).map(([k,v]) => `${k}: ${String(v).slice(0, 60)}`).join(', ').slice(0, 150);
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+}
+
+// --- Input handling ---
+const input = document.getElementById('input');
+
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+input.addEventListener('input', () => autoResize(input));
+
+// --- Init ---
+connect();
+renderThreadList();
+</script>
+
+</body>
+</html>

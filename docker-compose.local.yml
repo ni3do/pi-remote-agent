@@ -1,0 +1,7 @@
+# Local development override — use ./workspace instead of ../files/
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+services:
+  pi-agent:
+    volumes:
+      - ./workspace:/workspace
+      - pi-sessions:/root/.pi/agent/sessions

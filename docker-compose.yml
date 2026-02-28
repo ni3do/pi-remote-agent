@@ -1,0 +1,25 @@
+services:
+  pi-agent:
+    build: .
+    container_name: pi-remote-agent
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      # Workspace: your project files
+      # For Dokploy: use ../files/ for persistence across deploys
+      # For local: use ./workspace or an absolute path
+      - ../files/workspace:/workspace
+
+      # Persist pi sessions across restarts
+      - pi-sessions:/root/.pi/agent/sessions
+
+      # Optional: mount SSH keys for git operations
+      # - ../files/ssh:/root/.ssh:ro
+    environment:
+      - WORKSPACE_DIR=/workspace
+
+volumes:
+  pi-sessions:
