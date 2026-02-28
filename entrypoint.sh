@@ -46,5 +46,13 @@ else
   echo "[entrypoint] WARNING: No auth configured (set ANTHROPIC_OAUTH_REFRESH or ANTHROPIC_API_KEY)"
 fi
 
+# Debug: show auth status
+if [ -f /root/.pi/agent/auth.json ]; then
+  echo "[entrypoint] auth.json exists, contents:"
+  cat /root/.pi/agent/auth.json
+else
+  echo "[entrypoint] WARNING: No auth.json found!"
+fi
+
 echo "[entrypoint] Starting pi-remote-agent..."
 exec "$@"
