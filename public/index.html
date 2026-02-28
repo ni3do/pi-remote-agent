@@ -920,20 +920,65 @@ function switchView(view) {
 }
 
 // --- Activity log ---
+// Track streaming text_delta entries per thread to coalesce them into one log row
+let streamingLogEntries = new Map(); // threadId -> { el, text }
+
 function addLogEntry(timestamp, threadId, source, type, data) {
   const log = document.getElementById('activityLog');
+  const time = new Date(timestamp).toLocaleTimeString('en-US', { hour12: false });
+
+  // Coalesce text_delta events into a single updating log entry per thread
+  if (type === 'text_delta') {
+    let entry = streamingLogEntries.get(threadId);
+    if (!entry) {
+      const div = document.createElement('div');
+      div.className = 'log-entry';
+      div.innerHTML = `
+        <span class="log-time">${time}</span>
+        <span class="log-thread">${escHtml(threadId.slice(0, 18))}</span>
+        <span class="log-source ${source}">${source}</span>
+        <span class="log-type">streaming</span>
+        <span class="log-detail"></span>
+      `;
+      log.appendChild(div);
+      entry = { el: div, text: '' };
+      streamingLogEntries.set(threadId, entry);
+    }
+    entry.text += data.delta || '';
+    // Update the detail span with the tail of accumulated text
+    const detailEl = entry.el.querySelector('.log-detail');
+    const tail = entry.text.slice(-120);
+    detailEl.textContent = (entry.text.length > 120 ? '\u2026' : '') + tail;
+    // Update timestamp
+    entry.el.querySelector('.log-time').textContent = time;
+
+    if (currentView === 'monitor') log.scrollTop = log.scrollHeight;
+    return;
+  }
+
+  // On turn_end/response_complete/agent_end, finalize the streaming entry
+  if (type === 'turn_end' || type === 'response_complete' || type === 'agent_end') {
+    const entry = streamingLogEntries.get(threadId);
+    if (entry) {
+      const detailEl = entry.el.querySelector('.log-detail');
+      const charCount = entry.text.length;
+      const preview = entry.text.slice(0, 100).replace(/\n/g, ' ');
+      detailEl.textContent = `(${charCount} chars) ${preview}${charCount > 100 ? '\u2026' : ''}`;
+      entry.el.querySelector('.log-type').textContent = 'streamed';
+      streamingLogEntries.delete(threadId);
+    }
+  }
+
   const div = document.createElement('div');
   div.className = 'log-entry';
 
-  const time = new Date(timestamp).toLocaleTimeString('en-US', { hour12: false });
   let detail = '';
 
   switch (type) {
     case 'user_message': detail = data.message?.slice(0, 100) || ''; break;
-    case 'text_delta': detail = data.delta?.slice(0, 80) || ''; break;
     case 'tool_start': detail = `${data.tool}(${formatArgs(data.args)})`; break;
-    case 'tool_end': detail = `${data.tool} → ${data.isError ? 'ERROR' : 'ok'}`; break;
-    case 'worktree_created': detail = `${data.repo} → ${data.branch}`; break;
+    case 'tool_end': detail = `${data.tool} \u2192 ${data.isError ? 'ERROR' : 'ok'}`; break;
+    case 'worktree_created': detail = `${data.repo} \u2192 ${data.branch}`; break;
     case 'session_evicted': detail = data.reason || 'evicted'; break;
     case 'error': detail = data.message?.slice(0, 100) || ''; break;
     default: detail = type;
