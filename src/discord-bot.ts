@@ -20,7 +20,7 @@ import type { PiAgent, PiResponse } from "./pi-agent.js";
 
 const MAX_DISCORD_LENGTH = 2000;
 
-export function createDiscordBot(agent: PiAgent, token: string, channelId?: string) {
+export function createDiscordBot(agent: PiAgent, token: string) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -29,6 +29,9 @@ export function createDiscordBot(agent: PiAgent, token: string, channelId?: stri
       GatewayIntentBits.DirectMessages,
     ],
   });
+
+  // Track threads where the bot has been tagged
+  const activeThreads = new Set<string>();
 
   client.on("ready", () => {
     console.log(`[Discord] Logged in as ${client.user?.tag}`);
@@ -39,13 +42,19 @@ export function createDiscordBot(agent: PiAgent, token: string, channelId?: stri
     if (message.author.bot) return;
     if (message.system) return;
 
-    // In guilds: respond if mentioned, in configured channel, or in a thread we're already in
+    // In guilds: respond if mentioned, or in a thread where bot was previously tagged
     if (message.guild) {
       const mentioned = message.mentions.has(client.user!);
-      const inChannel = channelId && message.channelId === channelId;
-      const inActiveThread = message.channel.isThread()
-        && agent.getActiveThreads().includes(`discord-${message.channel.id}`);
-      if (!mentioned && !inChannel && !inActiveThread) return;
+      const inTaggedThread = message.channel.isThread()
+        && activeThreads.has(message.channel.id);
+      if (!mentioned && !inTaggedThread) return;
+
+      // Remember this thread if the bot was tagged
+      if (mentioned && message.channel.isThread()) {
+        activeThreads.add(message.channel.id);
+      }
+      // If tagged in a non-thread channel, the reply creates a thread context
+      // but we track by thread ID, so it'll be picked up naturally
     }
 
     // Use thread ID for session scoping (or DM user ID)

@@ -23,7 +23,7 @@ createApi(agent, port);
 if (process.env.DISCORD_BOT_TOKEN) {
   try {
     const { createDiscordBot } = await import("./discord-bot.js");
-    const client = createDiscordBot(agent, process.env.DISCORD_BOT_TOKEN, process.env.DISCORD_CHANNEL_ID);
+    const client = createDiscordBot(agent, process.env.DISCORD_BOT_TOKEN);
     client.on("error", (err) => console.error("[Discord] Error (non-fatal):", err.message));
     console.log("[pi-remote] Discord bot enabled");
   } catch (err: any) {
