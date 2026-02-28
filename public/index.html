@@ -208,6 +208,102 @@
     border: 1px solid var(--border);
   }
 
+  /* Markdown rendering in assistant messages */
+  .message.assistant.rendered { white-space: normal; }
+  .message.assistant.rendered p { margin: 0 0 8px 0; }
+  .message.assistant.rendered p:last-child { margin-bottom: 0; }
+  .message.assistant.rendered h1, .message.assistant.rendered h2,
+  .message.assistant.rendered h3, .message.assistant.rendered h4 {
+    margin: 12px 0 6px 0;
+    color: var(--accent);
+  }
+  .message.assistant.rendered h1 { font-size: 1.3em; }
+  .message.assistant.rendered h2 { font-size: 1.15em; }
+  .message.assistant.rendered h3 { font-size: 1.05em; }
+  .message.assistant.rendered ul, .message.assistant.rendered ol {
+    margin: 4px 0 8px 20px;
+  }
+  .message.assistant.rendered li { margin-bottom: 2px; }
+  .message.assistant.rendered code {
+    background: var(--bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    color: var(--orange);
+  }
+  .message.assistant.rendered pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 6px 0;
+    overflow-x: auto;
+    position: relative;
+  }
+  .message.assistant.rendered pre code {
+    background: none;
+    padding: 0;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .message.assistant.rendered blockquote {
+    border-left: 3px solid var(--accent);
+    padding-left: 12px;
+    margin: 6px 0;
+    color: var(--text-dim);
+  }
+  .message.assistant.rendered a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .message.assistant.rendered a:hover { text-decoration: underline; }
+  .message.assistant.rendered table {
+    border-collapse: collapse;
+    margin: 6px 0;
+    width: 100%;
+    font-size: 13px;
+  }
+  .message.assistant.rendered th, .message.assistant.rendered td {
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    text-align: left;
+  }
+  .message.assistant.rendered th {
+    background: var(--bg);
+    color: var(--accent);
+  }
+  .message.assistant.rendered hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 8px 0;
+  }
+  .message.assistant.rendered .copy-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 2px 6px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .message.assistant.rendered pre:hover .copy-btn { opacity: 1; }
+  .message.assistant.rendered .copy-btn:hover { color: var(--text); border-color: var(--accent); }
+  .message.assistant.rendered .lang-label {
+    position: absolute;
+    top: 4px;
+    left: 10px;
+    font-size: 10px;
+    color: var(--text-dim);
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
   .message.tool-call {
     align-self: flex-start;
     background: var(--bg);
@@ -455,7 +551,52 @@
   </div>
 </div>
 
+<!-- Markdown rendering -->
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.0/marked.min.js"></script>
+<!-- Syntax highlighting -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+
 <script>
+// Configure marked for safe, highlighted rendering
+marked.setOptions({
+  highlight: function(code, lang) {
+    if (lang && hljs.getLanguage(lang)) {
+      try { return hljs.highlight(code, { language: lang }).value; } catch {}
+    }
+    try { return hljs.highlightAuto(code).value; } catch {}
+    return code;
+  },
+  breaks: true,
+  gfm: true,
+});
+
+/**
+ * Render markdown text to safe HTML.
+ * Adds copy buttons to code blocks and language labels.
+ */
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = marked.parse(text);
+
+  // Add copy button and language label to <pre><code> blocks
+  html = html.replace(/<pre><code(?:\s+class="language-(\w+)")?>([\s\S]*?)<\/code><\/pre>/g,
+    (match, lang, code) => {
+      const langLabel = lang ? `<span class="lang-label">${escHtml(lang)}</span>` : '';
+      return `<pre>${langLabel}<button class="copy-btn" onclick="copyCode(this)">copy</button><code${lang ? ` class="language-${lang}"` : ''}>${code}</code></pre>`;
+    });
+
+  return html;
+}
+
+function copyCode(btn) {
+  const code = btn.parentElement.querySelector('code');
+  navigator.clipboard.writeText(code.textContent).then(() => {
+    btn.textContent = 'copied!';
+    setTimeout(() => btn.textContent = 'copy', 1500);
+  });
+}
+
 // --- State ---
 let ws = null;
 let currentThread = 'web-default';
@@ -598,14 +739,14 @@ function renderSingleMessage(msg) {
       break;
 
     case 'assistant':
-      div.className = 'message assistant';
+      div.className = 'message assistant rendered';
       if (msg.source && msg.source !== 'web') {
         const badge = document.createElement('div');
         badge.className = `msg-source ${msg.source}`;
         badge.textContent = msg.source;
         div.appendChild(badge);
       }
-      div.appendChild(document.createTextNode(msg.content));
+      div.innerHTML += renderMarkdown(msg.content);
       break;
 
     case 'tool-start':
@@ -669,6 +810,7 @@ function updateStreamingMessage(text) {
     streamingEl.id = 'streaming-msg';
     document.getElementById('messages').appendChild(streamingEl);
   }
+  // Show plain text while streaming (markdown rendering mid-stream looks janky)
   streamingEl.textContent = text;
   scrollToBottom();
 }
@@ -680,8 +822,12 @@ function finalizeStreamingMessage(threadId, text, source) {
   }
 
   if (threadId === currentThread && streamingEl) {
+    // Render final markdown
+    streamingEl.className = 'message assistant rendered';
+    streamingEl.innerHTML = renderMarkdown(text);
     streamingEl.id = '';
     streamingEl = null;
+    scrollToBottom();
   }
 }
 
