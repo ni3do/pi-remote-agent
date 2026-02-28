@@ -35,8 +35,9 @@ export function createDiscordBot(agent: PiAgent, token: string, channelId?: stri
   });
 
   client.on("messageCreate", async (message: Message) => {
-    // Ignore own messages
+    // Ignore own messages and system messages
     if (message.author.bot) return;
+    if (message.system) return;
 
     // In guilds: respond if mentioned, in configured channel, or in a thread we're already in
     if (message.guild) {
