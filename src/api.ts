@@ -30,7 +30,7 @@ export function createApi(agent: PiAgent, port: number) {
 
   // Chat endpoint
   app.post("/api/chat", async (req, res) => {
-    const { threadId = "default", message, source = "api" } = req.body;
+    const { threadId = "default", message, source = "api", repoUrl, description } = req.body;
 
     if (!message || typeof message !== "string") {
       res.status(400).json({ error: "message (string) is required" });
@@ -38,10 +38,28 @@ export function createApi(agent: PiAgent, port: number) {
     }
 
     try {
-      const response = await agent.chat(threadId, message, source);
+      const response = await agent.chat(threadId, message, source, { repoUrl, description });
       res.json(response);
     } catch (err: any) {
       console.error("[API] Error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Setup a repo for a session
+  app.post("/api/session/setup", async (req, res) => {
+    const { threadId = "default", repoUrl, description = "work" } = req.body;
+
+    if (!repoUrl || typeof repoUrl !== "string") {
+      res.status(400).json({ error: "repoUrl (string) is required" });
+      return;
+    }
+
+    try {
+      await agent.setupSession(threadId, repoUrl, description, "api");
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("[API] Setup error:", err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -53,7 +71,12 @@ export function createApi(agent: PiAgent, port: number) {
     res.json({ success: true });
   });
 
-  // List active threads
+  // List active sessions with details
+  app.get("/api/sessions", (_req, res) => {
+    res.json({ sessions: agent.getSessionInfo() });
+  });
+
+  // List active threads (backward compat)
   app.get("/api/threads", (_req, res) => {
     res.json({ threads: agent.getActiveThreads() });
   });
@@ -79,18 +102,56 @@ export function createApi(agent: PiAgent, port: number) {
 
         if (msg.type === "chat") {
           const threadId = msg.threadId || "web-default";
-          // Don't await — let it stream via events
-          agent.chat(threadId, msg.message, "web").catch((err) => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                threadId,
-                source: "web",
-                timestamp: Date.now(),
-                type: "error",
-                data: { message: err.message },
-              }));
-            }
-          });
+          agent
+            .chat(threadId, msg.message, "web", {
+              repoUrl: msg.repoUrl,
+              description: msg.description,
+            })
+            .catch((err) => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(
+                  JSON.stringify({
+                    threadId,
+                    source: "web",
+                    timestamp: Date.now(),
+                    type: "error",
+                    data: { message: err.message },
+                  })
+                );
+              }
+            });
+        }
+
+        if (msg.type === "setup_repo") {
+          const threadId = msg.threadId || "web-default";
+          agent
+            .setupSession(threadId, msg.repoUrl, msg.description || "work", "web")
+            .then(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(
+                  JSON.stringify({
+                    threadId,
+                    source: "web",
+                    timestamp: Date.now(),
+                    type: "repo_ready",
+                    data: { repoUrl: msg.repoUrl },
+                  })
+                );
+              }
+            })
+            .catch((err) => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(
+                  JSON.stringify({
+                    threadId,
+                    source: "web",
+                    timestamp: Date.now(),
+                    type: "error",
+                    data: { message: err.message },
+                  })
+                );
+              }
+            });
         }
 
         if (msg.type === "new_session") {

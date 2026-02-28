@@ -1,25 +1,33 @@
 /**
- * Pi Agent wrapper — manages AgentSession lifecycle.
- * One session per "conversation" (Discord thread, Slack thread, etc.)
- * Emits events for real-time monitoring via WebSocket.
+ * Pi Agent — manages AgentSession lifecycle with worktree-based isolation.
+ *
+ * Flow:
+ *   1. User sends "work on currico, fix auth bug"
+ *   2. Agent parses repo + description
+ *   3. Clone repo if needed, create worktree + branch
+ *   4. Create AgentSession with cwd = worktree path
+ *   5. Work happens in isolated worktree
+ *   6. On cleanup: commit + push + remove worktree
  */
 
 import {
   AuthStorage,
   createAgentSession,
   ModelRegistry,
-  SessionManager,
+  SessionManager as PiSessionManager,
   SettingsManager,
   createCodingTools,
   type AgentSession,
   type AgentSessionEvent,
 } from "@mariozechner/pi-coding-agent";
 import { EventEmitter } from "events";
+import { WorktreeManager, type WorktreeInfo } from "./worktree-manager.js";
+import { SessionLifecycleManager } from "./session-manager.js";
 
 export interface PiAgentOptions {
   workspaceDir: string;
-  provider?: string;
-  modelId?: string;
+  maxSessions?: number;
+  idleTimeoutMs?: number;
 }
 
 export interface PiResponse {
@@ -36,40 +44,87 @@ export interface PiEvent {
   data: any;
 }
 
+/** Parsed intent from user's first message */
+interface WorkIntent {
+  repoUrl: string;
+  description: string;
+}
+
 export class PiAgent extends EventEmitter {
-  private sessions = new Map<string, AgentSession>();
   private options: PiAgentOptions;
   private authStorage: ReturnType<typeof AuthStorage.create>;
   private modelRegistry: ModelRegistry;
+  private worktreeManager: WorktreeManager;
+  private lifecycle: SessionLifecycleManager;
 
   constructor(options: PiAgentOptions) {
     super();
     this.options = options;
     this.authStorage = AuthStorage.create();
     this.modelRegistry = new ModelRegistry(this.authStorage);
+    this.worktreeManager = new WorktreeManager(options.workspaceDir);
+    this.lifecycle = new SessionLifecycleManager({
+      maxSessions: options.maxSessions ?? 8,
+      idleTimeoutMs: options.idleTimeoutMs,
+      worktreeManager: this.worktreeManager,
+      onEvict: (managed) => {
+        this.broadcast(managed.threadId, "system", "session_evicted", {
+          reason: "idle_timeout",
+        });
+      },
+    });
   }
 
   /**
-   * Get or create a session for a conversation thread.
-   * Each Discord/Slack thread gets its own session with full history.
+   * Get or create a session for a thread.
+   * If the thread has a repo context, creates a worktree.
+   * If no repo context, uses the base workspace directory.
    */
-  private async getSession(threadId: string): Promise<AgentSession> {
-    if (this.sessions.has(threadId)) {
-      return this.sessions.get(threadId)!;
+  private async getOrCreateSession(
+    threadId: string,
+    source: string,
+    repoUrl?: string,
+    description?: string
+  ): Promise<AgentSession> {
+    // Existing session? Touch and return.
+    const existing = this.lifecycle.get(threadId);
+    if (existing) {
+      this.lifecycle.touch(threadId);
+      return existing.session;
     }
 
-    const cwd = this.options.workspaceDir;
+    let cwd = this.options.workspaceDir;
+    let worktree: WorktreeInfo | null = null;
+
+    // If repo URL provided, set up worktree
+    if (repoUrl) {
+      const repoPath = this.worktreeManager.ensureCloned(repoUrl);
+      const desc = description || "work";
+      const shortId = threadId.slice(0, 8).replace(/[^a-z0-9]/gi, "");
+      worktree = this.worktreeManager.create(repoPath, desc, shortId);
+      cwd = worktree.path;
+      this.broadcast(threadId, source, "worktree_created", {
+        path: worktree.path,
+        branch: worktree.branch,
+        repo: worktree.repoName,
+      });
+    }
 
     const { session } = await createAgentSession({
       cwd,
       tools: createCodingTools(cwd),
-      sessionManager: SessionManager.create(cwd),
+      sessionManager: PiSessionManager.create(cwd),
       settingsManager: SettingsManager.create(cwd),
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
     });
 
-    this.sessions.set(threadId, session);
+    const registered = await this.lifecycle.register(threadId, session, worktree, source);
+    if (!registered) {
+      session.dispose();
+      throw new Error("All sessions are busy. Try again later.");
+    }
+
     return session;
   }
 
@@ -86,14 +141,54 @@ export class PiAgent extends EventEmitter {
   }
 
   /**
+   * Set up a session with a specific repo.
+   * Call this before chat() if you know the repo upfront.
+   */
+  async setupSession(
+    threadId: string,
+    repoUrl: string,
+    description: string,
+    source = "api"
+  ): Promise<void> {
+    await this.getOrCreateSession(threadId, source, repoUrl, description);
+  }
+
+  /**
    * Send a message and collect the full response.
    * Streams events in real-time for monitoring.
+   *
+   * Options:
+   * - repoUrl: GitHub repo URL to clone/worktree (for first message)
+   * - description: short description for branch naming
+   * - threadContext: previous messages from Discord/Slack thread (for resumed sessions)
    */
-  async chat(threadId: string, message: string, source = "api"): Promise<PiResponse> {
-    const session = await this.getSession(threadId);
+  async chat(
+    threadId: string,
+    message: string,
+    source = "api",
+    options?: {
+      repoUrl?: string;
+      description?: string;
+      threadContext?: string;
+    }
+  ): Promise<PiResponse> {
+    const session = await this.getOrCreateSession(
+      threadId,
+      source,
+      options?.repoUrl,
+      options?.description
+    );
+
+    this.lifecycle.touch(threadId);
 
     let text = "";
     const toolCalls: PiResponse["toolCalls"] = [];
+
+    // Build the full prompt, including thread context if provided
+    let fullMessage = message;
+    if (options?.threadContext) {
+      fullMessage = `Previous conversation context from this thread:\n${options.threadContext}\n\nNew message: ${message}`;
+    }
 
     // Broadcast user message
     this.broadcast(threadId, source, "user_message", { message });
@@ -179,7 +274,7 @@ export class PiAgent extends EventEmitter {
     });
 
     try {
-      await session.prompt(message);
+      await session.prompt(fullMessage);
     } finally {
       unsubscribe();
     }
@@ -195,28 +290,40 @@ export class PiAgent extends EventEmitter {
 
   /** Get list of active session thread IDs */
   getActiveThreads(): string[] {
-    return Array.from(this.sessions.keys());
+    return this.lifecycle.getActiveThreads();
+  }
+
+  /** Get info about all managed sessions (for monitoring) */
+  getSessionInfo(): Array<{
+    threadId: string;
+    source: string;
+    lastActivity: number;
+    createdAt: number;
+    worktree: { path: string; branch: string; repo: string } | null;
+  }> {
+    return this.lifecycle.getAll().map((m) => ({
+      threadId: m.threadId,
+      source: m.source,
+      lastActivity: m.lastActivity,
+      createdAt: m.createdAt,
+      worktree: m.worktree
+        ? { path: m.worktree.path, branch: m.worktree.branch, repo: m.worktree.repoName }
+        : null,
+    }));
   }
 
   /**
-   * Start a new session for a thread (clears history).
+   * Start a new session for a thread (clears existing).
    */
   async newSession(threadId: string): Promise<void> {
-    const existing = this.sessions.get(threadId);
-    if (existing) {
-      existing.dispose();
-      this.sessions.delete(threadId);
-    }
+    await this.lifecycle.remove(threadId);
     this.broadcast(threadId, "system", "session_cleared", {});
   }
 
   /**
    * Clean up all sessions.
    */
-  dispose(): void {
-    for (const session of this.sessions.values()) {
-      session.dispose();
-    }
-    this.sessions.clear();
+  async dispose(): Promise<void> {
+    await this.lifecycle.dispose();
   }
 }

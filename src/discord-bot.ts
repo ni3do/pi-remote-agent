@@ -5,10 +5,17 @@
  * - DM the bot or mention it in a channel
  * - Threaded conversations maintain session context
  * - "!new" starts a fresh session
+ * - "!repo <url> [description]" sets up a repo with worktree
  * - "!status" shows current session info
  */
 
-import { Client, GatewayIntentBits, type Message, type TextChannel } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  type Message,
+  type TextChannel,
+  type ThreadChannel,
+} from "discord.js";
 import type { PiAgent, PiResponse } from "./pi-agent.js";
 
 const MAX_DISCORD_LENGTH = 2000;
@@ -38,10 +45,10 @@ export function createDiscordBot(agent: PiAgent, token: string, channelId?: stri
       if (!mentioned && !inChannel) return;
     }
 
-    // Use thread ID for session scoping (or channel ID if not in thread)
+    // Use thread ID for session scoping (or DM user ID)
     const threadId = message.channel.isThread()
-      ? message.channel.id
-      : `dm-${message.author.id}`;
+      ? `discord-${message.channel.id}`
+      : `discord-dm-${message.author.id}`;
 
     const content = message.content
       .replace(new RegExp(`<@!?${client.user!.id}>`), "")
@@ -49,7 +56,7 @@ export function createDiscordBot(agent: PiAgent, token: string, channelId?: stri
 
     if (!content) return;
 
-    // Commands
+    // === Commands ===
     if (content === "!new") {
       await agent.newSession(threadId);
       await message.reply("🆕 Started a fresh session.");
@@ -57,17 +64,51 @@ export function createDiscordBot(agent: PiAgent, token: string, channelId?: stri
     }
 
     if (content === "!status") {
-      await message.reply("✅ Pi agent is running.");
+      const sessions = agent.getSessionInfo();
+      const current = sessions.find((s) => s.threadId === threadId);
+      if (current) {
+        const idle = Math.round((Date.now() - current.lastActivity) / 60000);
+        const wt = current.worktree
+          ? `\n📂 Worktree: \`${current.worktree.branch}\` (${current.worktree.repo})`
+          : "\n📂 No worktree";
+        await message.reply(
+          `✅ Session active (idle ${idle}min)${wt}\n📊 ${sessions.length}/8 sessions`
+        );
+      } else {
+        await message.reply(`💤 No active session.\n📊 ${sessions.length}/8 sessions`);
+      }
       return;
     }
 
-    // Show typing indicator
+    // !repo <url> [description]
+    const repoMatch = content.match(/^!repo\s+(https?:\/\/\S+)(?:\s+(.+))?$/i);
+    if (repoMatch) {
+      const repoUrl = repoMatch[1];
+      const description = repoMatch[2] || "work";
+
+      await message.reply(`📦 Setting up repo: \`${repoUrl}\`...`);
+      try {
+        await agent.setupSession(threadId, repoUrl, description, "discord");
+        await message.reply(`✅ Ready! Worktree created. Start chatting.`);
+      } catch (err: any) {
+        await message.reply(`❌ Setup failed: ${err.message?.slice(0, 200)}`);
+      }
+      return;
+    }
+
+    // === Chat ===
     const channel = message.channel as TextChannel;
     await channel.sendTyping();
     const typingInterval = setInterval(() => channel.sendTyping(), 8000);
 
     try {
-      const response = await agent.chat(threadId, content);
+      // Gather thread context if this is a resumed session (no active session for this thread)
+      let threadContext: string | undefined;
+      if (!agent.getActiveThreads().includes(threadId) && message.channel.isThread()) {
+        threadContext = await getThreadContext(message.channel as ThreadChannel);
+      }
+
+      const response = await agent.chat(threadId, content, "discord", { threadContext });
       clearInterval(typingInterval);
       await sendResponse(message, response);
     } catch (err: any) {
@@ -79,6 +120,29 @@ export function createDiscordBot(agent: PiAgent, token: string, channelId?: stri
 
   client.login(token);
   return client;
+}
+
+/**
+ * Fetch recent thread messages for context injection.
+ */
+async function getThreadContext(thread: ThreadChannel): Promise<string | undefined> {
+  try {
+    const messages = await thread.messages.fetch({ limit: 50 });
+    if (messages.size <= 1) return undefined;
+
+    const lines = messages
+      .reverse()
+      .map((m) => {
+        const role = m.author.bot ? "agent" : "user";
+        const text = m.content.slice(0, 500);
+        return `[${role}]: ${text}`;
+      })
+      .filter((_, i, arr) => i < arr.length - 1); // Exclude the current message
+
+    return lines.length > 0 ? lines.join("\n") : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -123,7 +187,6 @@ function chunkText(text: string, maxLen: number): string[] {
       chunks.push(remaining);
       break;
     }
-    // Try to break at a newline
     let breakAt = remaining.lastIndexOf("\n", maxLen);
     if (breakAt < maxLen / 2) breakAt = maxLen;
     chunks.push(remaining.slice(0, breakAt));

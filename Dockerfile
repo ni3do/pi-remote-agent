@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y \
 # Symlink fd (Debian names it fdfind)
 RUN ln -s $(which fdfind) /usr/local/bin/fd || true
 
+# Install Playwright with Chromium
+RUN npx playwright install --with-deps chromium
+
 WORKDIR /app
 
 # Install dependencies
@@ -31,7 +34,11 @@ RUN npx tsc
 # Create workspace dir
 RUN mkdir -p /workspace
 
-# Default port
+# Entrypoint configures git with GitHub token if available
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 3000
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["node", "dist/index.js"]

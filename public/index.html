@@ -413,6 +413,7 @@
     </div>
   </div>
   <button class="new-session-btn" onclick="newSession()">+ New Session</button>
+  <button class="new-session-btn" onclick="newRepoSession()" style="border-color: var(--purple); color: var(--purple);">📦 New Repo Session</button>
 
   <div class="monitor-panel">
     <div class="sidebar-section">Live Activity</div>
@@ -553,6 +554,19 @@ function handleEvent(event) {
         threads.get(threadId).messages = [];
         renderMessages();
       }
+      break;
+
+    case 'worktree_created':
+      addChatMessage(threadId, 'system', `📂 Worktree created: ${data.branch} (${data.repo})`, source);
+      break;
+
+    case 'repo_ready':
+      addChatMessage(threadId, 'system', `✅ Repo ready: ${data.repoUrl}`, source);
+      if (isCurrentThread) setWorking(false);
+      break;
+
+    case 'session_evicted':
+      addChatMessage(threadId, 'system', `💤 Session evicted (${data.reason})`, source);
       break;
   }
 }
@@ -740,6 +754,8 @@ function addLogEntry(timestamp, threadId, source, type, data) {
     case 'text_delta': detail = data.delta?.slice(0, 80) || ''; break;
     case 'tool_start': detail = `${data.tool}(${formatArgs(data.args)})`; break;
     case 'tool_end': detail = `${data.tool} → ${data.isError ? 'ERROR' : 'ok'}`; break;
+    case 'worktree_created': detail = `${data.repo} → ${data.branch}`; break;
+    case 'session_evicted': detail = data.reason || 'evicted'; break;
     case 'error': detail = data.message?.slice(0, 100) || ''; break;
     default: detail = type;
   }
@@ -781,6 +797,8 @@ function addMonitorEntry(timestamp, threadId, type, data) {
     case 'agent_start': label = '▶ agent started'; break;
     case 'agent_end': label = '■ agent done'; break;
     case 'response_complete': label = '✓ response'; break;
+    case 'worktree_created': cls = 'tool'; label = `📂 ${data.repo}:${data.branch}`; break;
+    case 'session_evicted': cls = 'error'; label = `💤 evicted`; break;
     case 'error': cls = 'error'; label = `❌ ${data.message?.slice(0, 40)}`; break;
     default: return; // skip others
   }
@@ -826,6 +844,31 @@ function newSession() {
 
   switchThread(threadId);
   renderThreadList();
+}
+
+function newRepoSession() {
+  const repoUrl = prompt('GitHub repo URL (e.g. https://github.com/you/repo):');
+  if (!repoUrl) return;
+
+  const description = prompt('Short description (for branch name):') || 'work';
+  const safeName = description.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 20);
+  const threadId = `repo-${safeName}-${Date.now().toString(36)}`;
+
+  threads.set(threadId, { messages: [], sources: new Set(['web']) });
+  switchThread(threadId);
+  renderThreadList();
+
+  addChatMessage(threadId, 'system', `📦 Setting up repo: ${repoUrl}...`, 'web');
+  setWorking(true);
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'setup_repo',
+      threadId,
+      repoUrl,
+      description,
+    }));
+  }
 }
 
 function setWorking(working) {

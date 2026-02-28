@@ -8,13 +8,15 @@ import { createApi } from "./api.js";
 
 const workspaceDir = process.env.WORKSPACE_DIR || "/workspace";
 const port = parseInt(process.env.PORT || "3000");
+const maxSessions = parseInt(process.env.MAX_SESSIONS || "8");
 
 console.log(`[pi-remote] Workspace: ${workspaceDir}`);
+console.log(`[pi-remote] Max sessions: ${maxSessions}`);
 
 // Create the shared Pi agent
-const agent = new PiAgent({ workspaceDir });
+const agent = new PiAgent({ workspaceDir, maxSessions });
 
-// Always start the HTTP API
+// Always start the HTTP API + WebSocket + Web UI
 createApi(agent, port);
 
 // Start Discord bot if configured
@@ -40,15 +42,13 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN && process.env.SL
   console.log("[pi-remote] Slack bot disabled (missing SLACK_* env vars)");
 }
 
-// Graceful shutdown
-process.on("SIGINT", () => {
-  console.log("[pi-remote] Shutting down...");
-  agent.dispose();
+// Graceful shutdown — commits, pushes, and cleans up all worktrees
+const shutdown = async () => {
+  console.log("[pi-remote] Shutting down (cleaning up worktrees)...");
+  await agent.dispose();
+  console.log("[pi-remote] Cleanup complete.");
   process.exit(0);
-});
+};
 
-process.on("SIGTERM", () => {
-  console.log("[pi-remote] Shutting down...");
-  agent.dispose();
-  process.exit(0);
-});
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
