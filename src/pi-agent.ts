@@ -234,14 +234,13 @@ export class PiAgent extends EventEmitter {
             .join("\n");
           toolCalls.push({
             tool: event.toolName,
-            args: event.args,
+            args: {},
             result,
             isError: event.isError,
           });
           this.broadcast(threadId, source, "tool_end", {
             toolCallId: event.toolCallId,
             tool: event.toolName,
-            args: event.args,
             result,
             isError: event.isError,
           });
