@@ -21,9 +21,14 @@ createApi(agent, port);
 
 // Start Discord bot if configured
 if (process.env.DISCORD_BOT_TOKEN) {
-  const { createDiscordBot } = await import("./discord-bot.js");
-  createDiscordBot(agent, process.env.DISCORD_BOT_TOKEN, process.env.DISCORD_CHANNEL_ID);
-  console.log("[pi-remote] Discord bot enabled");
+  try {
+    const { createDiscordBot } = await import("./discord-bot.js");
+    const client = createDiscordBot(agent, process.env.DISCORD_BOT_TOKEN, process.env.DISCORD_CHANNEL_ID);
+    client.on("error", (err) => console.error("[Discord] Error (non-fatal):", err.message));
+    console.log("[pi-remote] Discord bot enabled");
+  } catch (err: any) {
+    console.error("[pi-remote] Discord bot failed to start:", err.message);
+  }
 } else {
   console.log("[pi-remote] Discord bot disabled (no DISCORD_BOT_TOKEN)");
 }
@@ -41,6 +46,14 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN && process.env.SL
 } else {
   console.log("[pi-remote] Slack bot disabled (missing SLACK_* env vars)");
 }
+
+// Don't crash on unhandled errors
+process.on("uncaughtException", (err) => {
+  console.error("[pi-remote] Uncaught exception (non-fatal):", err.message);
+});
+process.on("unhandledRejection", (err: any) => {
+  console.error("[pi-remote] Unhandled rejection (non-fatal):", err?.message || err);
+});
 
 // Graceful shutdown — commits, pushes, and cleans up all worktrees
 const shutdown = async () => {
