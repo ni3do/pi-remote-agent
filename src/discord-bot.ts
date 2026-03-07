@@ -21,6 +21,16 @@ import { isSttEnabled, isAudioMime, transcribe } from "./transcribe.js";
 
 const MAX_DISCORD_LENGTH = 2000;
 
+/**
+ * Parse DISCORD_AUTO_CHANNELS env var.
+ * Format: comma-separated channel IDs, e.g. "123456789,987654321"
+ */
+function getAutoChannels(): Set<string> {
+  const raw = process.env.DISCORD_AUTO_CHANNELS || "";
+  const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return new Set(ids);
+}
+
 export function createDiscordBot(agent: PiAgent, token: string) {
   const client = new Client({
     intents: [
@@ -31,8 +41,9 @@ export function createDiscordBot(agent: PiAgent, token: string) {
     ],
   });
 
-  // Track threads where the bot has been tagged
+  // Track threads where the bot has been tagged or auto-responded
   const activeThreads = new Set<string>();
+  const autoChannels = getAutoChannels();
 
   client.on("ready", () => {
     console.log(`[Discord] Logged in as ${client.user?.tag}`);
@@ -43,19 +54,22 @@ export function createDiscordBot(agent: PiAgent, token: string) {
     if (message.author.bot) return;
     if (message.system) return;
 
-    // In guilds: respond if mentioned, or in a thread where bot was previously tagged
+    // In guilds: respond if mentioned, in an active thread, or in an auto-channel
     if (message.guild) {
       const mentioned = message.mentions.has(client.user!);
       const inTaggedThread = message.channel.isThread()
         && activeThreads.has(message.channel.id);
-      if (!mentioned && !inTaggedThread) return;
+      const inAutoChannel = autoChannels.has(message.channelId);
+      const inAutoChannelThread = message.channel.isThread()
+        && message.channel.parentId
+        && autoChannels.has(message.channel.parentId);
 
-      // Remember this thread if the bot was tagged
-      if (mentioned && message.channel.isThread()) {
+      if (!mentioned && !inTaggedThread && !inAutoChannel && !inAutoChannelThread) return;
+
+      // Track threads for continued conversation
+      if (message.channel.isThread()) {
         activeThreads.add(message.channel.id);
       }
-      // If tagged in a non-thread channel, the reply creates a thread context
-      // but we track by thread ID, so it'll be picked up naturally
     }
 
     // Use thread ID for session scoping (or DM user ID)
@@ -141,6 +155,34 @@ export function createDiscordBot(agent: PiAgent, token: string) {
     }
 
     // === Chat ===
+
+    // In auto-channels, create a thread for the conversation if not already in one
+    let replyTarget: Message = message;
+    if (!message.channel.isThread() && autoChannels.has(message.channelId)) {
+      try {
+        const threadName = content.slice(0, 100) || "Pi Agent";
+        const thread = await message.startThread({ name: threadName });
+        activeThreads.add(thread.id);
+        // Update threadId to use the new thread
+        const autoThreadId = `discord-${thread.id}`;
+        await thread.sendTyping();
+        const typingInterval = setInterval(() => thread.sendTyping(), 8000);
+
+        try {
+          const response = await agent.chat(autoThreadId, content, "discord");
+          clearInterval(typingInterval);
+          await sendResponseToChannel(thread, response);
+        } catch (err: any) {
+          clearInterval(typingInterval);
+          console.error("[Discord] Error:", err);
+          await thread.send(`❌ Error: ${err.message?.slice(0, 200)}`);
+        }
+        return;
+      } catch (err: any) {
+        console.error("[Discord] Failed to create thread:", err);
+      }
+    }
+
     const channel = message.channel as TextChannel;
     await channel.sendTyping();
     const typingInterval = setInterval(() => channel.sendTyping(), 8000);
@@ -283,6 +325,26 @@ async function sendResponse(message: Message, response: PiResponse) {
   const chunks = chunkText(fullText, MAX_DISCORD_LENGTH);
   for (const chunk of chunks) {
     await message.reply(chunk);
+  }
+}
+
+/**
+ * Send a PiResponse to a channel/thread (not as a reply to a specific message).
+ */
+async function sendResponseToChannel(channel: TextChannel | ThreadChannel, response: PiResponse) {
+  const formattedText = formatForDiscord(response.text);
+  const toolSummary = formatToolSummary(response.toolCalls);
+
+  const fullText = (formattedText + toolSummary).trim();
+
+  if (!fullText) {
+    await channel.send("_(No response)_");
+    return;
+  }
+
+  const chunks = chunkText(fullText, MAX_DISCORD_LENGTH);
+  for (const chunk of chunks) {
+    await channel.send(chunk);
   }
 }
 
