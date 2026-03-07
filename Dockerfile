@@ -11,10 +11,22 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-venv \
     ffmpeg \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Symlink fd (Debian names it fdfind)
 RUN ln -s $(which fdfind) /usr/local/bin/fd || true
+
+# Rust toolchain (stable)
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH="/usr/local/cargo/bin:$PATH"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal \
+    && rustup component add clippy rustfmt
 
 # Install OpenAI Whisper for local speech-to-text transcription.
 # Uses --break-system-packages since this is a container.
