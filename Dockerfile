@@ -29,8 +29,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && rustup component add clippy rustfmt
 
 # Install OpenAI Whisper for GPU-accelerated speech-to-text transcription.
-# Split into separate layers so large downloads are cached across build retries.
-RUN pip3 install --break-system-packages torch
+# Install CUDA PyTorch first (separate layer for caching the ~2GB download),
+# then Whisper on top. Uses cu121 index to match nvidia runtime.
+RUN pip3 install --break-system-packages torch --index-url https://download.pytorch.org/whl/cu121
 RUN pip3 install --break-system-packages openai-whisper
 
 # Install Playwright with Chromium

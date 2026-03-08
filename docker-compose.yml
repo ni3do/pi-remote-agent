@@ -14,14 +14,10 @@ services:
       # Pi agent config (auth.json lives here, token refresh persists across restarts)
       - pi-agent-config:/root/.pi/agent
 
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    runtime: nvidia
     environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
       - WORKSPACE_DIR=/workspace
       # Speech-to-text (local Whisper). Set STT_ENABLED=true to activate.
       - STT_ENABLED=${STT_ENABLED:-false}
