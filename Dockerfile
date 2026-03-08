@@ -28,11 +28,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal \
     && rustup component add clippy rustfmt
 
-# Install OpenAI Whisper for local speech-to-text transcription.
-# Uses --break-system-packages since this is a container.
-# Install PyTorch CPU-only first to avoid downloading ~2GB of CUDA libraries.
-RUN pip3 install --break-system-packages torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip3 install --break-system-packages openai-whisper
+# Install OpenAI Whisper for GPU-accelerated speech-to-text transcription.
+# Split into separate layers so large downloads are cached across build retries.
+RUN pip3 install --break-system-packages torch
+RUN pip3 install --break-system-packages openai-whisper
 
 # Install Playwright with Chromium
 RUN npx playwright install --with-deps chromium
