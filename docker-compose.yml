@@ -1,7 +1,6 @@
 services:
   pi-agent:
     build: .
-    container_name: pi-remote-agent
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
