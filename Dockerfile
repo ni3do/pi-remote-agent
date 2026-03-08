@@ -30,8 +30,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 
 # Install OpenAI Whisper for local speech-to-text transcription.
 # Uses --break-system-packages since this is a container.
-# PyTorch CPU is sufficient — Whisper "base" model runs in ~5-10s for 30s audio.
-RUN pip3 install --break-system-packages openai-whisper
+# Install PyTorch CPU-only first to avoid downloading ~2GB of CUDA libraries.
+RUN pip3 install --break-system-packages torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip3 install --break-system-packages openai-whisper
 
 # Install Playwright with Chromium
 RUN npx playwright install --with-deps chromium
